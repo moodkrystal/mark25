@@ -1,82 +1,144 @@
+mkdir betting-app
+cd betting-app
+npm init -y
+npm install express mongoose cors body-parser
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+app.use(express.static("public"));
+
+mongoose.connect("mongodb://127.0.0.1:27017/bettingDB");
+
+const UserSchema = new mongoose.Schema({
+    username: String,
+    balance: { type: Number, default: 1000 },
+    bets: [
+        {
+            match: String,
+            amount: Number,
+            prediction: String,
+            result: String
+        }
+    ]
+});
+
+const User = mongoose.model("User", UserSchema);
+
+// Create or get user
+app.post("/user", async (req, res) => {
+    let user = await User.findOne({ username: req.body.username });
+    if (!user) {
+        user = new User({ username: req.body.username });
+        await user.save();
+    }
+    res.json(user);
+});
+
+// Place bet
+app.post("/bet", async (req, res) => {
+    const { username, match, amount, prediction } = req.body;
+
+    let user = await User.findOne({ username });
+
+    if (!user || user.balance < amount)
+        return res.json({ message: "Insufficient balance" });
+
+    user.balance -= amount;
+    user.bets.push({ match, amount, prediction, result: "Pending" });
+
+    await user.save();
+    res.json(user);
+});
+
+// Admin view all users
+app.get("/admin/users", async (req, res) => {
+    const users = await User.find();
+    res.json(users);
+});
+
+// Auto update match results
+app.post("/admin/update", async (req, res) => {
+    const users = await User.find();
+
+    for (let user of users) {
+        for (let bet of user.bets) {
+            if (bet.result === "Pending") {
+                bet.result = "Won";
+                user.balance += bet.amount * 2;
+            }
+        }
+        await user.save();
+    }
+
+    res.json({ message: "Results Updated" });
+});
+
+app.listen(3000, () => console.log("Server running on port 3000"));
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Simple Bible App</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            text-align: center;
-            padding: 20px;
-        }
-
-        h1 {
-            color: darkblue;
-        }
-
-        input {
-            padding: 8px;
-            width: 200px;
-        }
-
-        button {
-            padding: 8px 12px;
-            background-color: darkblue;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background-color: navy;
-        }
-
-        #result {
-            margin-top: 20px;
-            font-size: 18px;
-            background: white;
-            padding: 15px;
-            border-radius: 5px;
-        }
-    </style>
+    <title>My Betting App</title>
 </head>
 <body>
 
-    <h1>📖 Simple Bible Website</h1>
-    <p>Enter a Bible reference (example: John 3:16)</p>
+<h2>Betting Platform (Demo)</h2>
 
-    <input type="text" id="reference" placeholder="John 3:16">
-    <button onclick="getVerse()">Search</button>
+<input id="username" placeholder="Enter username">
+<button onclick="createUser()">Start</button>
 
-    <div id="result"></div>
+<h3>Place Bet</h3>
+<input id="match" placeholder="Match">
+<input id="amount" type="number" placeholder="Amount">
+<input id="prediction" placeholder="Prediction">
+<button onclick="placeBet()">Bet</button>
 
-    <script>
-        async function getVerse() {
-            const ref = document.getElementById("reference").value;
-            const resultDiv = document.getElementById("result");
+<h3>User Info</h3>
+<pre id="output"></pre>
 
-            if (!ref) {
-                resultDiv.innerHTML = "Please enter a Bible reference.";
-                return;
-            }
+<script>
+let currentUser = "";
 
-            try {
-                const response = await fetch(`https://bible-api.com/${ref}`);
-                const data = await response.json();
+async function createUser() {
+    currentUser = document.getElementById("username").value;
 
-                if (data.text) {
-                    resultDiv.innerHTML = `
-                        <strong>${data.reference}</strong><br><br>
-                        ${data.text}
-                    `;
-                } else {
-                    resultDiv.innerHTML = "Verse not found.";
-                }
-            } catch (error) {
-                resultDiv.innerHTML = "Error fetching verse.";
-            }
-        }
-    </script>
+    const res = await fetch("/user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: currentUser })
+    });
+
+    const data = await res.json();
+    document.getElementById("output").innerText =
+        JSON.stringify(data, null, 2);
+}
+
+async function placeBet() {
+    const match = document.getElementById("match").value;
+    const amount = document.getElementById("amount").value;
+    const prediction = document.getElementById("prediction").value;
+
+    const res = await fetch("/bet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            username: currentUser,
+            match,
+            amount,
+            prediction
+        })
+    });
+
+    const data = await res.json();
+    document.getElementById("output").innerText =
+        JSON.stringify(data, null, 2);
+}
+</script>
 
 </body>
 </html>
+
