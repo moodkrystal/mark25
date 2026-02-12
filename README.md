@@ -1,144 +1,145 @@
-mkdir betting-app
-cd betting-app
-npm init -y
-npm install express mongoose cors body-parser
+{
+  "name": "maddison-bet-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.0",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.0.0",
+    "socket.io": "^4.7.0"
+  }
+}
+require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const bodyParser = require("body-parser");
+const http = require("http");
+const socketIo = require("socket.io");
 
 const app = express();
-app.use(cors());
-app.use(bodyParser.json());
-app.use(express.static("public"));
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: { origin: "*" }
+});
 
-mongoose.connect("mongodb://127.0.0.1:27017/bettingDB");
+app.use(cors());
+app.use(express.json());
+
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("Database Connected"))
+  .catch(err => console.log(err));
+
+app.use("/api/auth", require("./routes/auth"));
+app.use("/api/bet", require("./routes/bet"));
+
+io.on("connection", (socket) => {
+  console.log("User Connected");
+
+  setInterval(() => {
+    const randomOdds = (Math.random() * 3 + 1).toFixed(2);
+    socket.emit("updateOdds", randomOdds);
+  }, 5000);
+});
+
+server.listen(5000, () => {
+  console.log("MADDISON BET Server Running on port 5000");
+});
+const mongoose = require("mongoose");
 
 const UserSchema = new mongoose.Schema({
-    username: String,
-    balance: { type: Number, default: 1000 },
-    bets: [
-        {
-            match: String,
-            amount: Number,
-            prediction: String,
-            result: String
-        }
-    ]
+  username: String,
+  email: String,
+  password: String,
+  balance: { type: Number, default: 0 }
 });
 
-const User = mongoose.model("User", UserSchema);
+module.exports = mongoose.model("User", UserSchema);
+const router = require("express").Router();
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const User = require("../models/User");
 
-// Create or get user
-app.post("/user", async (req, res) => {
-    let user = await User.findOne({ username: req.body.username });
-    if (!user) {
-        user = new User({ username: req.body.username });
-        await user.save();
-    }
-    res.json(user);
+router.post("/register", async (req, res) => {
+  const hashed = await bcrypt.hash(req.body.password, 10);
+
+  const user = new User({
+    username: req.body.username,
+    email: req.body.email,
+    password: hashed
+  });
+
+  await user.save();
+  res.json({ message: "User Registered" });
 });
 
-// Place bet
-app.post("/bet", async (req, res) => {
-    const { username, match, amount, prediction } = req.body;
+router.post("/login", async (req, res) => {
+  const user = await User.findOne({ email: req.body.email });
+  if (!user) return res.status(400).json({ error: "User not found" });
 
-    let user = await User.findOne({ username });
+  const valid = await bcrypt.compare(req.body.password, user.password);
+  if (!valid) return res.status(400).json({ error: "Wrong password" });
 
-    if (!user || user.balance < amount)
-        return res.json({ message: "Insufficient balance" });
-
-    user.balance -= amount;
-    user.bets.push({ match, amount, prediction, result: "Pending" });
-
-    await user.save();
-    res.json(user);
+  const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET);
+  res.json({ token });
 });
 
-// Admin view all users
-app.get("/admin/users", async (req, res) => {
-    const users = await User.find();
-    res.json(users);
+module.exports = router;
+const router = require("express").Router();
+const User = require("../models/User");
+
+router.post("/place", async (req, res) => {
+  const { userId, amount, odds } = req.body;
+
+  const user = await User.findById(userId);
+
+  if (user.balance < amount)
+    return res.status(400).json({ error: "Insufficient balance" });
+
+  user.balance -= amount;
+  await user.save();
+
+  res.json({
+    message: "Bet placed",
+    potentialWin: amount * odds
+  });
 });
 
-// Auto update match results
-app.post("/admin/update", async (req, res) => {
-    const users = await User.find();
+module.exports = router;
+import React, { useEffect, useState } from "react";
+import io from "socket.io-client";
 
-    for (let user of users) {
-        for (let bet of user.bets) {
-            if (bet.result === "Pending") {
-                bet.result = "Won";
-                user.balance += bet.amount * 2;
-            }
-        }
-        await user.save();
-    }
+const socket = io("http://localhost:5000");
 
-    res.json({ message: "Results Updated" });
-});
+function App() {
+  const [odds, setOdds] = useState(1.0);
 
-app.listen(3000, () => console.log("Server running on port 3000"));
-<!DOCTYPE html>
-<html>
-<head>
-    <title>My Betting App</title>
-</head>
-<body>
-
-<h2>Betting Platform (Demo)</h2>
-
-<input id="username" placeholder="Enter username">
-<button onclick="createUser()">Start</button>
-
-<h3>Place Bet</h3>
-<input id="match" placeholder="Match">
-<input id="amount" type="number" placeholder="Amount">
-<input id="prediction" placeholder="Prediction">
-<button onclick="placeBet()">Bet</button>
-
-<h3>User Info</h3>
-<pre id="output"></pre>
-
-<script>
-let currentUser = "";
-
-async function createUser() {
-    currentUser = document.getElementById("username").value;
-
-    const res = await fetch("/user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: currentUser })
+  useEffect(() => {
+    socket.on("updateOdds", (newOdds) => {
+      setOdds(newOdds);
     });
+  }, []);
 
-    const data = await res.json();
-    document.getElementById("output").innerText =
-        JSON.stringify(data, null, 2);
+  return (
+    <div>
+      <h1>MADDISON BET</h1>
+      <h2>Live Football Odds: {odds}</h2>
+    </div>
+  );
 }
 
-async function placeBet() {
-    const match = document.getElementById("match").value;
-    const amount = document.getElementById("amount").value;
-    const prediction = document.getElementById("prediction").value;
+export default App;
+const axios = require("axios");
 
-    const res = await fetch("/bet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            username: currentUser,
-            match,
-            amount,
-            prediction
-        })
-    });
-
-    const data = await res.json();
-    document.getElementById("output").innerText =
-        JSON.stringify(data, null, 2);
+async function fetchMatches() {
+  const response = await axios.get("SPORTS_API_URL");
+  return response.data;
 }
-</script>
+mongodump --uri="your_mongo_uri" --out=/backup/
 
-</body>
-</html>
 
